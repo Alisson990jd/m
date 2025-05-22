@@ -22,8 +22,11 @@ jobs:
       - name: Instalar e configurar ngrok (Token Direto)
         uses: tmshkr/ngrok-ssh@v1
         with:
-          ngrok-token: 1vgZrCA9yJDURy3OK1gNbS2G610_3CX2e2bqT4Ee88uMBk5he  # Token direto no workflow (NÃO SEGURO!)
+          ngrok-token: 1vgZrCA9yJDURy3OK1gNbS2G610_3CX2e2bqT4Ee88uMBk5he
           ssh-port: 22
           ssh-user: devuser
           ssh-password: password123
           enable-sudo: true
+        # Força a manter o processo ativo (evita término do job)
+      - name: Manter o contêiner em execução
+        run: sleep 1000000
