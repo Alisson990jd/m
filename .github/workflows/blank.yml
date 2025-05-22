@@ -1,4 +1,4 @@
-name: SSH via Ngrok (API Direta)
+name: SSH via Ngrok (Token Configurado)
 on:
   push:
     branches:
@@ -21,23 +21,25 @@ jobs:
 
       - name: Instalar ngrok e configurar token
         run: |
+          # Baixar e instalar o ngrok
           wget https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-linux-amd64.tgz 
           tar -xvzf ngrok-v3-stable-linux-amd64.tgz
           sudo mv ngrok /usr/local/bin/
-          export NGROK_AUTHTOKEN=1vgZrCA9yJDURy3OK1gNbS2G610_3CX2e2bqT4Ee88uMBk5he
 
-      - name: Criar túnel TCP com ngrok via API
+          # Configurar token no arquivo de configuração do ngrok
+          ngrok config add-authtoken 1vgZrCA9yJDURy3OK1gNbS2G610_3CX2e2bqT4Ee88uMBk5he
+
+      - name: Iniciar túnel TCP com ngrok
         run: |
           # Iniciar ngrok em segundo plano
-          ngrok tcp 22 --authtoken=$NGROK_AUTHTOKEN &
+          ngrok tcp 22 &
 
           # Aguardar o túnel ser criado
           sleep 10
 
-          # Obter o endereço exposto
-          PUBLIC_URL=$(curl -s -u "$NGROK_AUTHTOKEN:" http://localhost:4040/api/tunnels | jq -r '.tunnels[0].public_url')
-
-          echo "🔗 Conecte-se via SSH em: ssh devuser@${PUBLIC_URL#*@} -p ${PUBLIC_URL##*:}"
+          # Obter endereço exposto
+          PUBLIC_URL=$(curl -s http://localhost:4040/api/tunnels | jq -r '.tunnels[0].public_url')
+          echo "🔗 Conecte-se via SSH: ssh devuser@${PUBLIC_URL#*@} -p ${PUBLIC_URL##*:}"
 
       - name: Manter o contêiner em execução
         run: sleep 1000000
