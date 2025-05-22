@@ -22,9 +22,19 @@ jobs:
       - name: Instalar ngrok com link personalizado
         run: |
           wget https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-linux-amd64.tgz 
-          tar -xvzf ngrok-v3-stable-linux-amd64.tgz  # Extrai corretamente o arquivo .tgz [[1]]
+          tar -xvzf ngrok-v3-stable-linux-amd64.tgz
           sudo mv ngrok /usr/local/bin/
           ngrok config add-authtoken 1vgZrCA9yJDURy3OK1gNbS2G610_3CX2e2bqT4Ee88uMBk5he
+
+      - name: Mover arquivo de configuração para o caminho esperado
+        run: |
+          mkdir -p ~/.ngrok2
+          cp ~/.config/ngrok/ngrok.yml ~/.ngrok2/
+
+      - name: Definir variável de ambiente do ngrok
+        run: |
+          echo "NGROK_AUTHTOKEN=1vgZrCA9yJDURy3OK1gNbS2G610_3CX2e2bqT4Ee88uMBk5he" >> ~/.bashrc
+          export NGROK_AUTHTOKEN=1vgZrCA9yJDURy3OK1gNbS2G610_3CX2e2bqT4Ee88uMBk5he
 
       - name: Iniciar túnel SSH com ngrok
         uses: tmshkr/ngrok-ssh@v1
