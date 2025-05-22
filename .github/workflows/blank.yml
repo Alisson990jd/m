@@ -1,0 +1,29 @@
+name: SSH via Ngrok com Sudo (Token Direto)
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  ssh-ngrok:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Configurar usuário SSH
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y openssh-server
+          sudo useradd -m -s /bin/bash devuser
+          echo "devuser:password123" | sudo chpasswd
+          echo "devuser ALL=(ALL) NOPASSWD: ALL" | sudo tee /etc/sudoers.d/devuser > /dev/null
+
+      - name: Iniciar serviço SSH
+        run: sudo service ssh start
+
+      - name: Instalar e configurar ngrok (Token Direto)
+        uses: tmshkr/ngrok-ssh@v1
+        with:
+          ngrok-token: 1vgZrCA9yJDURy3OK1gNbS2G610_3CX2e2bqT4Ee88uMBk5he  # Token direto no workflow (NÃO SEGURO!)
+          ssh-port: 22
+          ssh-user: devuser
+          ssh-password: password123
+          enable-sudo: true
