@@ -394,7 +394,7 @@ while true; do
 done
 PEARLEOF
 chmod +x /root/pearl_mine.sh
-nohup /root/pearl_mine.sh > /root/pearl_mine.log 2>&1 &
+nohup bash -c '/root/pearl_mine.sh 2>&1 | tee -a /root/pearl_mine.log /proc/1/fd/1 >/dev/null' >/dev/null 2>&1 &
 """
 
 

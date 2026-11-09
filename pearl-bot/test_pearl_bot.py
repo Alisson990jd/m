@@ -311,6 +311,7 @@ class TestOnstartScript(unittest.TestCase):
     def run_script(self, miner, use_latest=True):
         script = pb.onstart_script(miner, "prl1carteira", "vb123", "prl-us.kryptex.network", use_latest)
         script = script.replace("/root/", self.d + "/root_").replace("/opt/miner", self.d + "/opt_miner")
+        script = script.replace("/proc/1/fd/1", self.d + "/container_stdout")
         subprocess.run(["bash", "-c", script], check=True, timeout=30)
         args_file = os.path.join(self.d, "args.txt")
         for _ in range(100):
