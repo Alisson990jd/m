@@ -1,0 +1,28 @@
+{
+  "vast_api_key": "COLE_SUA_CHAVE_DA_VAST_AQUI",
+  "wallet": "COLE_SUA_CARTEIRA_PRL_OU_USUARIO_KRYPTEX",
+
+  "min_profit_per_hour": 0.10,
+  "stop_profit_per_hour": 0.0,
+
+  "max_instances": 5,
+  "max_spend_per_hour": 2.00,
+  "min_credit_usd": 3.0,
+
+  "allow_on_demand": true,
+  "allow_interruptible": true,
+  "bid_markup": 0.05,
+
+  "min_reliability": 0.90,
+  "verified_only": false,
+  "exclude_countries": [],
+  "max_gpus_per_offer": 8,
+
+  "start_grace_min": 20,
+  "hashrate_check_min": 40,
+  "min_hashrate_ratio": 0.5,
+  "loop_interval_min": 5,
+
+  "gpus": {},
+  "gpu_miner": {}
+}
