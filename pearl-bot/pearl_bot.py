@@ -96,6 +96,7 @@ DEFAULT_CONFIG = {
     "hashrate_check_min": 40,      # a partir daqui confere o hashrate real na Kryptex
     "min_hashrate_ratio": 0.5,     # destroi se o hashrate real for < 50% do esperado
     "loop_interval_min": 5,
+    "rank_by": "roi",              # "roi" = lucro por dolar gasto (banca pequena); "profit" = lucro por hora
     "gpus": {},                    # sobrescreve DEFAULT_GPUS: {"RTX 4090": 343.4, ...}
     "gpu_miner": {},               # forca minerador por GPU: {"RTX 4090": "srb"}
     "miners": {},                  # sobrescreve DEFAULT_MINERS
@@ -305,7 +306,8 @@ def evaluate(o, cfg, market, learned):
     revenue = n * th_gpu * market["usd_per_th_hour"]
     return {"offer": o, "id": o["id"], "machine_id": o.get("machine_id"), "gpu": name, "n": n,
             "th": n * th_gpu, "type": o["_type"], "bid": bid, "cost": cost, "revenue": revenue,
-            "profit": revenue - cost, "country": offer_country(o),
+            "profit": revenue - cost, "roi": (revenue - cost) / cost if cost > 0 else 0.0,
+            "country": offer_country(o),
             "rel": float(o.get("reliability2") or 0), "verified": o.get("verification")}
 
 
@@ -324,6 +326,9 @@ def best_offers(offers, cfg, market, state, skip_machines=()):
         k = ev["machine_id"]
         if k not in best or ev["profit"] > best[k]["profit"]:
             best[k] = ev
+    if cfg.get("rank_by", "roi") == "roi":
+        # banca pequena: primeiro as que dao mais lucro por dolar gasto
+        return sorted(best.values(), key=lambda e: -e["roi"])
     return sorted(best.values(), key=lambda e: -e["profit"])
 
 
@@ -493,7 +498,7 @@ def manage_instance(vast, inst, cfg, market, workers, state, live):
     return False
 
 
-def cycle(cfg, live, state):
+def cycle(cfg, live, state, margin_min=None):
     vast = Vast(cfg["vast_api_key"])
     try:
         market = get_market()
@@ -504,7 +509,7 @@ def cycle(cfg, live, state):
         f"${market['usd_per_th_hour'] * 100:.4f}/h por 100 TH/s")
 
     # margem: o que as maquinas gastam ate o proximo ciclo (+3 min de folga)
-    margin_h = (float(cfg["loop_interval_min"]) + 3) / 60.0
+    margin_h = (margin_min if margin_min else float(cfg["loop_interval_min"]) + 3) / 60.0
     stop_at = float(cfg["stop_credit_usd"])
     active, credit, spend = [], None, 0.0
     if cfg["vast_api_key"]:
@@ -570,6 +575,10 @@ def main():
     ap.add_argument("command", choices=["scan", "status", "run", "stop-all"])
     ap.add_argument("--live", action="store_true", help="executa de verdade (gasta dinheiro)")
     ap.add_argument("--once", action="store_true", help="roda um ciclo e sai")
+    ap.add_argument("--max-minutes", type=float, default=0, help="para o loop depois de N minutos")
+    ap.add_argument("--handoff-margin-min", type=float, default=0,
+                    help="no ultimo ciclo, a trava de saldo cobre N minutos sem vigilancia")
+    ap.add_argument("--stop-all-at-end", action="store_true", help="destroi as maquinas do bot ao sair (teste)")
     ap.add_argument("--config", default=os.path.join(HERE, "config.json"))
     ap.add_argument("--state", default=os.path.join(HERE, "state.json"))
     a = ap.parse_args()
@@ -618,15 +627,27 @@ def main():
         return
 
     log(f"pearl-bot iniciado ({'AO VIVO' if a.live else 'SIMULACAO'})")
+    interval = float(cfg["loop_interval_min"])
+    t0 = time.time()
     while True:
+        elapsed = (time.time() - t0) / 60.0
+        last = a.once or bool(a.max_minutes and elapsed + interval >= a.max_minutes)
+        # no ultimo ciclo, guarda saldo para o tempo sem vigilancia ate o proximo job
+        margin = a.handoff_margin_min if (last and a.handoff_margin_min) else None
         try:
-            cycle(cfg, a.live, state)
+            cycle(cfg, a.live, state, margin_min=margin)
         except RuntimeError as e:
             log(f"erro no ciclo: {e}")
         save_json(a.state, state)
-        if a.once:
+        if last:
             break
-        time.sleep(float(cfg["loop_interval_min"]) * 60)
+        time.sleep(interval * 60)
+    if a.stop_all_at_end and cfg["vast_api_key"]:
+        try:
+            destroy_all(vast, bot_instances(vast), a.live, "fim do teste")
+        except RuntimeError as e:
+            log(f"erro ao destruir no fim: {e}")
+    log("pearl-bot terminou")
 
 
 if __name__ == "__main__":

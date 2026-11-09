@@ -87,6 +87,19 @@ class TestBestOffers(unittest.TestCase):
         self.assertEqual([e["id"] for e in res], [2])
 
 
+class TestRanking(unittest.TestCase):
+    def test_roi_first_then_profit(self):
+        offers = [
+            offer(id=1, machine_id=1, num_gpus=8, dph_total=2.00),   # lucro 0.06*8... = 0.06; roi baixo
+            offer(id=2, machine_id=2, num_gpus=4, dph_total=0.60),   # lucro 0.43, roi 0.72
+            offer(id=3, machine_id=3, num_gpus=1, dph_total=0.08),   # lucro 0.18, roi 2.2
+        ]
+        roi = pb.best_offers(offers, cfg(), MARKET, {})
+        self.assertEqual([e["id"] for e in roi], [3, 2])
+        prof = pb.best_offers(offers, cfg(rank_by="profit"), MARKET, {})
+        self.assertEqual([e["id"] for e in prof], [2, 3])
+
+
 class TestManage(unittest.TestCase):
     def inst(self, **kw):
         i = {"id": 7, "label": "pearlbot-vb1", "gpu_name": "RTX 4090", "num_gpus": 1, "machine_id": 10,
@@ -211,6 +224,24 @@ class TestCycle(unittest.TestCase):
     def test_kill_switch_quiet_with_enough_credit(self):
         fake = FakeVast(instances=[self.bot_inst(dph_total=0.45)], credit=5.0)
         self.run_cycle(fake)
+        self.assertEqual(fake.destroyed, [])
+
+    def run_cycle_margin(self, fake, margin):
+        c = cfg(vast_api_key="k", wallet="prl1abc")
+        with mock.patch.object(pb, "Vast", return_value=fake), \
+                mock.patch.object(pb, "get_market", return_value=MARKET), \
+                mock.patch.object(pb, "get_workers", return_value={}), \
+                mock.patch.object(pb.time, "sleep"), \
+                mock.patch.object(pb, "log"):
+            pb.cycle(c, True, {}, margin_min=margin)
+
+    def test_handoff_margin_reserves_unattended_time(self):
+        # $0.45/h por 90 min = $0.675: com $0.70 passa de $0.10 -> destroi; com $1.00 nao
+        fake = FakeVast(instances=[self.bot_inst(dph_total=0.45)], credit=0.70)
+        self.run_cycle_margin(fake, 90)
+        self.assertEqual(fake.destroyed, [7])
+        fake = FakeVast(instances=[self.bot_inst(dph_total=0.45)], credit=1.00)
+        self.run_cycle_margin(fake, 90)
         self.assertEqual(fake.destroyed, [])
 
     def test_kill_switch_respects_simulation(self):

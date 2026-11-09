@@ -1,0 +1,67 @@
+name: pearl-bot
+
+# Producao (branch main): um job por hora; cada job vigia as maquinas por ~5h40 e o proximo
+# fica na fila (concurrency) e assume quando o anterior termina.
+# Teste (push no branch do bot): roda 60 min e destroi as maquinas do bot no fim.
+on:
+  schedule:
+    - cron: "17 * * * *"
+  workflow_dispatch:
+  push:
+    branches: [ccr-2c0cdf22-hm31ht]
+    paths: ["pearl-bot/**", ".github/workflows/pearl-bot.yml"]
+
+concurrency:
+  group: pearl-bot
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  bot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 355
+    env:
+      VAST_API_KEY: ${{ secrets.VAST_API_KEY }}
+      PRL_WALLET: prl1py93nqcyanqyhvkh4vdp9jsm95qsv02kt30avrf4p0r7w692ke6tqw9p6sx
+      EVENT: ${{ github.event_name }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Restaurar estado (lista negra e hashrate aprendido)
+        uses: actions/cache/restore@v4
+        with:
+          path: pearl-bot/state.json
+          key: pearl-state-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: pearl-state-
+
+      - name: Testes
+        working-directory: pearl-bot
+        run: python3 -m unittest -q test_pearl_bot
+
+      - name: Rodar o bot
+        working-directory: pearl-bot
+        run: |
+          if [ -z "$VAST_API_KEY" ]; then
+            echo "::warning::secret VAST_API_KEY nao configurado: so simulando"
+            ARGS="--once"
+          elif [ "$EVENT" = "push" ]; then
+            ARGS="--live --max-minutes 60 --stop-all-at-end"
+          else
+            ARGS="--live --max-minutes 340 --handoff-margin-min 90"
+          fi
+          echo "modo: $EVENT $ARGS"
+          python3 pearl_bot.py run $ARGS
+
+      - name: Teste - destruir as maquinas do bot mesmo se o job for cancelado
+        if: always() && env.EVENT == 'push' && env.VAST_API_KEY != ''
+        working-directory: pearl-bot
+        run: python3 pearl_bot.py stop-all --live
+
+      - name: Salvar estado
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: pearl-bot/state.json
+          key: pearl-state-${{ github.run_id }}-${{ github.run_attempt }}

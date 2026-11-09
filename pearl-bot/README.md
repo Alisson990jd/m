@@ -92,3 +92,21 @@ O lucro vai em PRL para a sua carteira, não para a Vast. Para "crescer a banca"
   são pagos antes de o bot perceber.
 - O fork FP8 do Pearl (PIP-3), se for ativado, deixa só H100/H200/B200 minerando; as RTX param.
 - O bot não cobra tráfego de rede na conta (mineração usa pouco).
+
+## Rodando no GitHub Actions
+
+O workflow `.github/workflows/pearl-bot.yml` roda o bot sem precisar do seu PC.
+
+1. No GitHub: **Settings → Secrets and variables → Actions → New repository secret**,
+   nome `VAST_API_KEY`, valor = sua chave da Vast. Sem esse secret ele só simula.
+2. **Teste** (push no branch do bot): roda 60 min ao vivo e destrói as máquinas do bot no fim
+   (mesmo se o job for cancelado).
+3. **Produção** (arquivo no branch `main`): dispara a cada hora; cada job vigia por ~5h40 e o seguinte
+   fica na fila e assume quando ele termina. No último ciclo de cada job, a trava de saldo reserva 90 min
+   de gasto, para o caso de o próximo job atrasar.
+4. A lista negra e o hashrate aprendido ficam salvos no cache do Actions entre um job e outro.
+
+Os termos do GitHub proíbem usar o Actions para mineração ou para tarefas sem relação com o código do
+repositório. O GitHub pode cancelar os jobs ou bloquear o Actions. Se isso acontecer, as máquinas ficam
+sem vigilância: entre na Vast e destrua as máquinas `pearlbot-...`, ou rode `stop-all --live` em outro lugar.
+O repositório é público, então os logs (saldo, máquinas, gastos) ficam visíveis para qualquer pessoa.
