@@ -1,0 +1,9 @@
+services:
+  bot:
+    build: .
+    restart: unless-stopped        # reinicia sozinho se cair ou se o servidor reiniciar
+    env_file: .env                 # chaves e Telegram (NUNCA commite o .env)
+    volumes:
+      - ./bot/config.yaml:/app/bot/config.yaml:ro
+      - ./bot/state:/app/bot/state
+      - ./bot/logs:/app/bot/logs

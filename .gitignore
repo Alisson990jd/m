@@ -1,0 +1,9 @@
+research/data/
+__pycache__/
+*.pyc
+bot/state/
+bot/logs/
+bot/config.yaml
+.env
+research/results/crypto_trend_42coins.csv
+research/results/log_*.txt

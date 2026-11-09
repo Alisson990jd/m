@@ -1,0 +1,33 @@
+# Copie para bot/config.yaml e ajuste. Valores em USDT.
+mode: paper            # paper = dinheiro fictício | live = ordens reais (veja README)
+testnet: true          # só no modo live: true = testnet/demo da Binance
+state_file: bot/state/state.json
+log_file: bot/logs/bot.log
+loop_seconds: 60
+
+capital_usdt:          # capital de cada estratégia (cada uma tem sua "gaveta")
+  trend: 2000          # A. tendência BTC (spot)
+  breakout: 2000       # B. rompimento intradiário BTC/ETH (perpétuo)
+  carry: 4000          # C. arbitragem de funding BTC/ETH (spot + perpétuo)
+
+trend:
+  symbol: BTC
+  rebalance_band: 0.05   # só rebalanceia se a diferença passar de 5% do capital
+
+breakout:
+  symbols: [BTC, ETH]
+  k: 0.5                 # gatilho = abertura + 0,5 × (máxima − mínima de ontem)
+  trend_n: 50            # só opera se a abertura estiver acima da média de 50 dias
+
+carry:
+  symbols: [BTC, ETH]
+  perp_leverage: 2       # margem do perpétuo; capital = nocional × (1 + 1/alavancagem)
+  rebalance_move: 0.20   # re-hedge quando o preço andar 20% (evita liquidação)
+
+risk:
+  max_drawdown: 0.25     # desliga A e B se o patrimônio total cair 25% do pico
+
+fees:                    # usados no modo paper (e no ledger)
+  spot: 0.001            # 0,10% (0,075% pagando taxa em BNB)
+  perp: 0.0005           # 0,05% taker em futuros USDⓈ-M
+  slippage: 0.0002
