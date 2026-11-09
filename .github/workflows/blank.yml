@@ -1,45 +1,86 @@
-name: SSH via Ngrok (Token Configurado)
+name: SSH via Ngrok
+
+# Secrets necessários (Settings → Secrets and variables → Actions):
+#   NGROK_AUTHTOKEN  - token do ngrok (dashboard.ngrok.com → Your Authtoken)
+#   SSH_PUBLIC_KEY   - sua chave pública SSH (conteúdo de ~/.ssh/id_ed25519.pub)
+# Nenhum segredo ou senha fica escrito neste arquivo.
+
 on:
   push:
     branches:
       - main
+  workflow_dispatch:
 
 jobs:
   ssh-ngrok:
     runs-on: ubuntu-latest
+    timeout-minutes: 360
     steps:
-      - name: Configurar usuário SSH
+      - name: Verificar secrets
+        env:
+          NGROK_AUTHTOKEN: ${{ secrets.NGROK_AUTHTOKEN }}
+          SSH_PUBLIC_KEY: ${{ secrets.SSH_PUBLIC_KEY }}
+        run: |
+          if [ -z "$NGROK_AUTHTOKEN" ] || [ -z "$SSH_PUBLIC_KEY" ]; then
+            echo "::error::Configure os secrets NGROK_AUTHTOKEN e SSH_PUBLIC_KEY no repositório."
+            exit 1
+          fi
+
+      - name: Configurar usuário SSH (somente chave)
+        env:
+          SSH_PUBLIC_KEY: ${{ secrets.SSH_PUBLIC_KEY }}
         run: |
           sudo apt-get update
           sudo apt-get install -y openssh-server
+          # Usuário sem senha: o login só é possível com a chave autorizada.
           sudo useradd -m -s /bin/bash devuser
-          echo "devuser:password123" | sudo chpasswd
           echo "devuser ALL=(ALL) NOPASSWD: ALL" | sudo tee /etc/sudoers.d/devuser > /dev/null
+          sudo chmod 440 /etc/sudoers.d/devuser
+          sudo install -d -m 700 -o devuser -g devuser /home/devuser/.ssh
+          echo "$SSH_PUBLIC_KEY" | sudo tee /home/devuser/.ssh/authorized_keys > /dev/null
+          sudo chown devuser:devuser /home/devuser/.ssh/authorized_keys
+          sudo chmod 600 /home/devuser/.ssh/authorized_keys
+          # "00-" para ser lido antes de outros arquivos (no sshd vale a primeira ocorrência).
+          printf '%s\n' \
+            'PasswordAuthentication no' \
+            'KbdInteractiveAuthentication no' \
+            'PermitRootLogin no' \
+            'PubkeyAuthentication yes' \
+            'AllowUsers devuser' | sudo tee /etc/ssh/sshd_config.d/00-hardening.conf > /dev/null
+          sudo sshd -t
 
       - name: Iniciar serviço SSH
         run: sudo service ssh start
 
       - name: Instalar ngrok e configurar token
+        env:
+          NGROK_AUTHTOKEN: ${{ secrets.NGROK_AUTHTOKEN }}
         run: |
-          # Baixar e instalar o ngrok
-          wget https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-linux-amd64.tgz 
-          tar -xvzf ngrok-v3-stable-linux-amd64.tgz
+          wget -q https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-linux-amd64.tgz
+          tar -xzf ngrok-v3-stable-linux-amd64.tgz
           sudo mv ngrok /usr/local/bin/
-
-          # Configurar token no arquivo de configuração do ngrok
-          ngrok config add-authtoken 1vgZrCA9yJDURy3OK1gNbS2G610_3CX2e2bqT4Ee88uMBk5he
+          ngrok config add-authtoken "$NGROK_AUTHTOKEN"
 
       - name: Iniciar túnel TCP com ngrok
         run: |
-          # Iniciar ngrok em segundo plano
-          ngrok tcp 22 &
+          ngrok tcp 22 --log=stdout > ngrok.log 2>&1 &
 
-          # Aguardar o túnel ser criado
-          sleep 10
+          # Aguardar o túnel ser criado (até 30 s)
+          PUBLIC_URL=""
+          for i in $(seq 1 30); do
+            PUBLIC_URL=$(curl -s http://localhost:4040/api/tunnels | jq -r '.tunnels[0].public_url // empty')
+            [ -n "$PUBLIC_URL" ] && break
+            sleep 1
+          done
+          if [ -z "$PUBLIC_URL" ]; then
+            echo "::error::Túnel do ngrok não iniciou."
+            cat ngrok.log
+            exit 1
+          fi
 
-          # Obter endereço exposto
-          PUBLIC_URL=$(curl -s http://localhost:4040/api/tunnels | jq -r '.tunnels[0].public_url')
-          echo "🔗 Conecte-se via SSH: ssh devuser@${PUBLIC_URL#*@} -p ${PUBLIC_URL##*:}"
+          # public_url tem o formato tcp://HOST:PORTA
+          HOSTPORT=${PUBLIC_URL#tcp://}
+          echo "🔗 Conecte-se via SSH: ssh devuser@${HOSTPORT%:*} -p ${HOSTPORT##*:}"
 
       - name: Manter o contêiner em execução
-        run: sleep 1000000
+        run: sleep infinity
