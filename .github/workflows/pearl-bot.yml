@@ -1,15 +1,12 @@
 name: pearl-bot
 
-# Producao (branch main): um job por hora; cada job vigia as maquinas por ~5h40 e o proximo
-# fica na fila (concurrency) e assume quando o anterior termina.
-# Teste (push no branch do bot): roda 60 min e destroi as maquinas do bot no fim.
+# DESATIVADO: o bot agora roda na VM (pearl-bot/install_vm.sh). Rodar nos dois lugares ao mesmo tempo
+# faz os dois mexerem nas mesmas maquinas. So roda se alguem disparar a mao (workflow_dispatch, no main).
+# Para voltar a usar o Actions, desligue a VM e devolva os gatilhos:
+#   schedule: [{cron: "17 * * * *"}]   (producao, ~5h40 por job)
+#   push: {branches: [ccr-2c0cdf22-hm31ht], paths: ["pearl-bot/**"]}   (teste de 60 min)
 on:
-  schedule:
-    - cron: "17 * * * *"
   workflow_dispatch:
-  push:
-    branches: [ccr-2c0cdf22-hm31ht]
-    paths: ["pearl-bot/**", ".github/workflows/pearl-bot.yml"]
 
 concurrency:
   group: pearl-bot

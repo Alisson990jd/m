@@ -93,7 +93,21 @@ O lucro vai em PRL para a sua carteira, não para a Vast. Para "crescer a banca"
 - O fork FP8 do Pearl (PIP-3), se for ativado, deixa só H100/H200/B200 minerando; as RTX param.
 - O bot não cobra tráfego de rede na conta (mineração usa pouco).
 
-## Rodando no GitHub Actions
+## Rodando numa VM (recomendado: Oracle Cloud Always Free)
+
+Na VM (Oracle Linux com usuário `opc`, ou Ubuntu), rode:
+
+```bash
+curl -fsSLo install_vm.sh https://raw.githubusercontent.com/Alisson990jd/m/ccr-2c0cdf22-hm31ht/pearl-bot/install_vm.sh
+VAST_API_KEY=SUA_CHAVE PRL_WALLET=SUA_CARTEIRA bash install_vm.sh
+```
+
+Ele instala git e python3 se faltar, baixa o bot em `~/pearl-bot-app`, grava o `config.json` (permissão 600),
+roda os testes e cria o serviço `pearl-bot` (systemd), que liga sozinho junto com a VM e reinicia se cair.
+Rodar de novo atualiza o código. Para mudar limites, edite `~/pearl-bot-app/pearl-bot/config.json`
+e rode `sudo systemctl restart pearl-bot`.
+
+## Rodando no GitHub Actions (desativado)
 
 O workflow `.github/workflows/pearl-bot.yml` roda o bot sem precisar do seu PC.
 
