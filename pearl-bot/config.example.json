@@ -7,7 +7,10 @@
 
   "max_instances": 5,
   "max_spend_per_hour": 2.00,
-  "min_credit_usd": 3.0,
+  "min_credit_usd": 0.10,
+  "stop_credit_usd": 0.10,
+  "min_runway_hours": 1.0,
+  "use_latest_miner": true,
 
   "allow_on_demand": true,
   "allow_interruptible": true,

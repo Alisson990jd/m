@@ -28,14 +28,14 @@ def offer(**kw):
 
 
 class FakeVast:
-    def __init__(self, instances=(), offers=(), credit=50.0):
+    def __init__(self, instances=(), offers=(), credit=50.0, balance=0.0):
         self._inst = list(instances)
         self._offers = list(offers)
-        self.credit = credit
+        self.credit, self.balance = credit, balance
         self.created, self.destroyed = [], []
 
     def user(self):
-        return {"credit": self.credit}
+        return {"credit": self.credit, "balance": self.balance}
 
     def instances(self):
         return self._inst
@@ -172,10 +172,51 @@ class TestCycle(unittest.TestCase):
         self.run_cycle(fake, allow_on_demand=False)
         self.assertAlmostEqual(fake.created[0][1]["price"], 0.105)
 
-    def test_low_credit_rents_nothing(self):
-        fake = FakeVast(offers=[offer()], credit=1.0)
+    def test_waits_for_deposit_below_min_credit(self):
+        fake = FakeVast(offers=[offer()], credit=0.05)
         self.run_cycle(fake)
         self.assertEqual(fake.created, [])
+
+    def test_negative_balance_waits(self):
+        fake = FakeVast(offers=[offer()], credit=0, balance=-1.55)
+        self.run_cycle(fake)
+        self.assertEqual(fake.created, [])
+
+    def test_small_bank_rents_cheap_machine(self):
+        fake = FakeVast(offers=[offer(dph_total=0.10)], credit=0.30)  # precisa 0.10 + 0.10*(1+8/60)
+        self.run_cycle(fake)
+        self.assertEqual(len(fake.created), 1)
+
+    def test_skips_machine_without_one_hour_of_runway(self):
+        fake = FakeVast(offers=[offer(dph_total=0.10)], credit=0.20)
+        self.run_cycle(fake)
+        self.assertEqual(fake.created, [])
+
+    def bot_inst(self, **kw):
+        i = {"id": 7, "label": "pearlbot-vb1", "gpu_name": "H200 NVL", "num_gpus": 1, "machine_id": 10,
+             "actual_status": "running", "intended_status": "running", "dph_total": 0.10,
+             "start_date": time.time() - 10 * 60, "is_bid": False}
+        i.update(kw)
+        return i
+
+    def test_kill_switch_destroys_all_before_limit(self):
+        insts = [self.bot_inst(id=7, dph_total=0.45), self.bot_inst(id=8, dph_total=0.45)]
+        other = {"id": 99, "label": "outra", "actual_status": "running", "start_date": time.time()}
+        # maquinas com lucro, gastando $0.90/h; ate o proximo ciclo (8 min) ~$0.12 -> 0.20 - 0.12 < 0.10
+        fake = FakeVast(instances=insts + [other], offers=[offer()], credit=0.20)
+        self.run_cycle(fake)
+        self.assertEqual(sorted(fake.destroyed), [7, 8])
+        self.assertEqual(fake.created, [])
+
+    def test_kill_switch_quiet_with_enough_credit(self):
+        fake = FakeVast(instances=[self.bot_inst(dph_total=0.45)], credit=5.0)
+        self.run_cycle(fake)
+        self.assertEqual(fake.destroyed, [])
+
+    def test_kill_switch_respects_simulation(self):
+        fake = FakeVast(instances=[self.bot_inst(dph_total=0.45)], credit=0.12)
+        self.run_cycle(fake, live=False)
+        self.assertEqual(fake.destroyed, [])
 
     def test_ignores_instances_without_bot_label(self):
         other = {"id": 99, "label": "meu-treino", "actual_status": "exited", "start_date": 0}
@@ -187,6 +228,14 @@ class TestCycle(unittest.TestCase):
         fake = FakeVast(offers=[offer()])
         self.run_cycle(fake, live=False)
         self.assertEqual(fake.created, [])
+
+
+class TestCredit(unittest.TestCase):
+    def test_available_credit(self):
+        self.assertAlmostEqual(pb.available_credit({"credit": 0, "balance": -1.55}), -1.55)
+        self.assertAlmostEqual(pb.available_credit({"credit": 5.0, "balance": 0}), 5.0)
+        self.assertAlmostEqual(pb.available_credit({"credit": 5.0, "balance": -1.5}), 3.5)
+        self.assertAlmostEqual(pb.available_credit({"credit": 2.0, "balance": 10.0}), 2.0)
 
 
 class TestPoolHost(unittest.TestCase):
@@ -206,38 +255,77 @@ class TestPoolHost(unittest.TestCase):
         self.assertEqual(pb.miner_for("RTX 4090", c), "srb")
 
 
-@unittest.skipUnless(shutil.which("bash") and (shutil.which("curl") or shutil.which("wget")), "precisa de bash e curl")
+@unittest.skipUnless(shutil.which("bash") and shutil.which("curl"), "precisa de bash e curl")
 class TestOnstartScript(unittest.TestCase):
-    """Roda o script de inicializacao de verdade, com um 'minerador' falso servido por file://."""
+    """Roda o script de inicializacao de verdade, com mineradores falsos servidos por file://."""
 
-    def test_script_downloads_and_runs_miner(self):
-        d = tempfile.mkdtemp()
-        try:
-            pkg = os.path.join(d, "pkg", "krig-miner-1.0")
-            os.makedirs(pkg)
-            fake = os.path.join(pkg, "krig-miner")
-            with open(fake, "w") as f:
-                f.write('#!/bin/bash\necho "ARGS: $@" >> "%s/args.txt"\nsleep 1000\n' % d)
-            os.chmod(fake, 0o755)
-            tgz = os.path.join(d, "miner.tgz")
-            with tarfile.open(tgz, "w:gz") as t:
-                t.add(os.path.join(d, "pkg", "krig-miner-1.0"), arcname="krig-miner-1.0")
-            miner = dict(pb.DEFAULT_MINERS["krig"], urls=["file://" + tgz])
-            script = pb.onstart_script(miner, "prl1carteira", "vb123", "prl-us.kryptex.network")
-            script = script.replace("/root/", d + "/root_").replace("/opt/miner", d + "/opt_miner")
-            env = dict(os.environ, PATH="/nonexistent-wget:" + os.environ["PATH"])
-            subprocess.run(["bash", "-c", script], check=True, env=env, timeout=30)
-            args_file = os.path.join(d, "args.txt")
-            for _ in range(100):
-                if os.path.exists(args_file):
-                    break
-                time.sleep(0.1)
-            with open(args_file) as f:
-                got = f.read()
-            self.assertIn("--url stratum+ssl://prl-us.kryptex.network:8048 --user prl1carteira/vb123", got)
-        finally:
-            subprocess.run(["pkill", "-f", d], check=False)
-            shutil.rmtree(d, ignore_errors=True)
+    def setUp(self):
+        self.d = tempfile.mkdtemp()
+
+    def tearDown(self):
+        subprocess.run(["pkill", "-f", self.d], check=False)
+        shutil.rmtree(self.d, ignore_errors=True)
+
+    def fake_tgz(self, filename, marker):
+        pkg = os.path.join(self.d, "pkg_" + marker, "krig-miner-x")
+        os.makedirs(pkg)
+        with open(os.path.join(pkg, "krig-miner"), "w") as f:
+            f.write('#!/bin/bash\necho "%s ARGS: $@" >> "%s/args.txt"\nsleep 1000\n' % (marker, self.d))
+        os.chmod(os.path.join(pkg, "krig-miner"), 0o755)
+        path = os.path.join(self.d, filename)
+        with tarfile.open(path, "w:gz") as t:
+            t.add(pkg, arcname="krig-miner-x")
+        return "file://" + path
+
+    def run_script(self, miner, use_latest=True):
+        script = pb.onstart_script(miner, "prl1carteira", "vb123", "prl-us.kryptex.network", use_latest)
+        script = script.replace("/root/", self.d + "/root_").replace("/opt/miner", self.d + "/opt_miner")
+        subprocess.run(["bash", "-c", script], check=True, timeout=30)
+        args_file = os.path.join(self.d, "args.txt")
+        for _ in range(100):
+            if os.path.exists(args_file):
+                break
+            time.sleep(0.1)
+        with open(args_file) as f:
+            return f.read()
+
+    def api_json(self, urls):
+        path = os.path.join(self.d, "latest.json")
+        assets = ",\n".join('    {"name": "x", "browser_download_url": "%s"}' % u for u in urls)
+        with open(path, "w") as f:
+            f.write('{\n  "tag_name": "v9.9.9",\n  "assets": [\n%s\n  ]\n}\n' % assets)
+        return "file://" + path
+
+    def test_uses_latest_release(self):
+        pinned = self.fake_tgz("krig-miner-1.0.0-linux-x64.tar.gz", "FIXA")
+        hive = self.fake_tgz("krig-miner-9.9.9.hiveos.tar.gz", "HIVEOS")
+        latest = self.fake_tgz("krig-miner-9.9.9-linux-x64.tar.gz", "NOVA")
+        miner = dict(pb.DEFAULT_MINERS["krig"], urls=[pinned], latest_api=self.api_json([hive, latest]))
+        got = self.run_script(miner)
+        self.assertIn("NOVA ARGS: --url stratum+ssl://prl-us.kryptex.network:8048 --user prl1carteira/vb123", got)
+
+    def test_falls_back_to_pinned_when_github_fails(self):
+        pinned = self.fake_tgz("krig-miner-1.0.0-linux-x64.tar.gz", "FIXA")
+        miner = dict(pb.DEFAULT_MINERS["krig"], urls=[pinned], latest_api="file:///nao/existe.json")
+        self.assertIn("FIXA ARGS:", self.run_script(miner))
+
+    def test_pinned_only_when_latest_disabled(self):
+        pinned = self.fake_tgz("krig-miner-1.0.0-linux-x64.tar.gz", "FIXA")
+        latest = self.fake_tgz("krig-miner-9.9.9-linux-x64.tar.gz", "NOVA")
+        miner = dict(pb.DEFAULT_MINERS["krig"], urls=[pinned], latest_api=self.api_json([latest]))
+        self.assertIn("FIXA ARGS:", self.run_script(miner, use_latest=False))
+
+    def test_asset_patterns_match_real_release_names(self):
+        import re
+        names = {
+            "krig": "https://github.com/kryptex/krig-miner/releases/download/v1.6.0/krig-miner-1.6.0-linux-x64.tar.gz",
+            "peak": "https://github.com/peakminer/peakminer/releases/download/v2.20.7/peakminer-2.20.7.tar.gz",
+            "srb": "https://github.com/doktor83/SRBMiner-Multi/releases/download/3.8.6/SRBMiner-Multi-3-8-6-Linux.tar.gz",
+        }
+        for k, url in names.items():
+            self.assertTrue(re.search(pb.DEFAULT_MINERS[k]["asset"], url), k)
+        self.assertFalse(re.search(pb.DEFAULT_MINERS["krig"]["asset"], "x/krig-miner-1.6.0.hiveos.tar.gz"))
+        self.assertFalse(re.search(pb.DEFAULT_MINERS["peak"]["asset"], "x/peakminer-2.20.8rc1.tar.gz"))
 
 
 if __name__ == "__main__":

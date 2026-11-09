@@ -15,12 +15,20 @@ A cada 5 minutos (configurável):
    - depois de 40 min, confere o hashrate real do worker na Kryptex: abaixo de 50% do esperado → destrói e põe na lista negra;
    - lucro real (hashrate medido × preço − aluguel) abaixo de `stop_profit_per_hour` → destrói;
    - depois de 1 h rodando, aprende o hashrate real daquele modelo de GPU e usa nas próximas contas.
-3. Busca na Vast as ofertas de cada modelo de GPU (aluguel fixo e interrompível), calcula
+3. **Trava de saldo:** se o saldo da Vast, descontado o que as máquinas vão gastar até o próximo ciclo,
+   chegar a `stop_credit_usd` (US$ 0,10), destrói todas as máquinas do bot. Assim o saldo não fica negativo.
+4. Saldo abaixo de `min_credit_usd` (US$ 0,10): não aluga nada e fica esperando depósito. Quando o depósito cai,
+   volta a alugar sozinho.
+5. Busca na Vast as ofertas de cada modelo de GPU (aluguel fixo e interrompível), calcula
    `lucro = GPUs × TH/s × rendimento × preço − aluguel` e aluga as melhores com lucro ≥ `min_profit_per_hour`,
-   respeitando `max_instances`, `max_spend_per_hour` e `min_credit_usd`.
+   respeitando `max_instances`, `max_spend_per_hour` e se o saldo paga pelo menos `min_runway_hours` (1 h)
+   da máquina nova sem passar da trava.
 
-Na máquina alugada, ele baixa o minerador e começa a minerar para `carteira/worker` no servidor da Kryptex mais próximo
-(HK, SG, US, BR, EU, RU ou AE):
+O "saldo" é o crédito da Vast menos o que a conta estiver devendo (campo `balance` negativo).
+
+Na máquina alugada, ele pergunta ao GitHub qual é a **versão mais recente** do minerador, baixa e começa a minerar
+para `carteira/worker` no servidor da Kryptex mais próximo (HK, SG, US, BR, EU, RU ou AE). Se o GitHub falhar,
+usa a versão fixa do código (KRig 1.6.0, PeakMiner 2.20.7, SRBMiner 3.8.6). Mineradores:
 - **KRig** (da Kryptex, 0% de taxa) nas RTX;
 - **PeakMiner** nas placas de datacenter (H100, H200, A100, L40S…);
 - **SRBMiner-MULTI** como alternativa (`"gpu_miner": {"RTX 4090": "srb"}`).
@@ -46,7 +54,9 @@ python -m unittest -v test_pearl_bot     # testes
 ```
 
 O bot precisa ficar ligado (no seu PC ou num servidor) para vigiar as máquinas. Se ele parar, as máquinas
-continuam alugadas e cobrando. Use `stop-all --live` antes de desligar de vez.
+continuam alugadas e cobrando, e a trava de saldo também para de funcionar. Use `stop-all --live` antes de desligar de vez.
+
+O lucro vai em PRL para a sua carteira, não para a Vast. Para "crescer a banca" na Vast, venda o PRL e deposite de novo.
 
 ## Configuração (`config.json`)
 
@@ -56,7 +66,10 @@ continuam alugadas e cobrando. Use `stop-all --live` antes de desligar de vez.
 | `stop_profit_per_hour` | 0.0 | destrói se o lucro cair abaixo disso |
 | `max_instances` | 5 | máximo de máquinas ao mesmo tempo |
 | `max_spend_per_hour` | 2.00 | teto da soma dos aluguéis (US$/h) |
-| `min_credit_usd` | 3.0 | não aluga mais nada abaixo desse saldo |
+| `min_credit_usd` | 0.10 | abaixo desse saldo não aluga nada e espera depósito |
+| `stop_credit_usd` | 0.10 | destrói todas as máquinas do bot antes de o saldo passar daqui |
+| `min_runway_hours` | 1.0 | só aluga se o saldo pagar pelo menos 1 h da máquina nova |
+| `use_latest_miner` | true | baixa a versão mais nova do minerador; `false` usa a versão fixa |
 | `allow_on_demand` / `allow_interruptible` | true / true | tipos de aluguel permitidos |
 | `bid_markup` | 0.05 | lance interrompível = lance mínimo + 5% |
 | `min_reliability` | 0.90 | confiabilidade mínima do host |
@@ -69,7 +82,7 @@ continuam alugadas e cobrando. Use `stop-all --live` antes de desligar de vez.
 | `loop_interval_min` | 5 | intervalo entre ciclos |
 | `gpus` | tabela da Kryptex | sobrescreve o TH/s esperado por GPU, ex.: `{"RTX 4090": 330}` |
 | `gpu_miner` | automático | força o minerador por GPU: `krig`, `peak` ou `srb` |
-| `image` | `nvidia/cuda:12.4.1-runtime-ubuntu22.04` | imagem Docker usada |
+| `image` | `nvidia/cuda:12.4.1-base-ubuntu22.04` | imagem Docker (pequena; os mineradores já trazem o CUDA) |
 
 ## Riscos
 

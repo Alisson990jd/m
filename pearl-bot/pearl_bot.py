@@ -44,22 +44,27 @@ DEFAULT_GPUS = {
 }
 
 # Comandos tirados da pagina de conexao da Kryptex (pool.kryptex.com/prl).
+# Na maquina alugada, o script pergunta ao GitHub qual e a versao mais recente (releases/latest)
+# e baixa o arquivo cujo endereco casa com "asset". Se o GitHub falhar, usa "urls" (versao fixa).
 DEFAULT_MINERS = {
     "krig": {  # minerador da propria Kryptex, 0% de taxa, NVIDIA RTX 2000-5000
-        "urls": ["https://github.com/kryptex/krig-miner/releases/download/v1.5.14/krig-miner-1.5.14-linux-x64.tar.gz"],
+        "repo": "kryptex/krig-miner",
+        "asset": r"/krig-miner-[0-9.]+-linux-x64\.tar\.gz$",
+        "urls": ["https://github.com/kryptex/krig-miner/releases/download/v1.6.0/krig-miner-1.6.0-linux-x64.tar.gz"],
         "bin": "krig-miner",
         "cmd": '"$BIN" --url stratum+ssl://{host}:8048 --user {wallet}/{worker}',
     },
-    "peak": {  # PeakMiner: RTX + datacenter (H/A/L/B)
-        "urls": ["https://github.com/peakminer/peakminer/releases/download/v2.20.5/peakminer-2.20.5.tar.gz"],
+    "peak": {  # PeakMiner: RTX + datacenter (H/A/L/B); traz o CUDA embutido
+        "repo": "peakminer/peakminer",
+        "asset": r"/peakminer-[0-9.]+\.tar\.gz$",
+        "urls": ["https://github.com/peakminer/peakminer/releases/download/v2.20.7/peakminer-2.20.7.tar.gz"],
         "bin": "peakminer",
         "cmd": '"$BIN" --coin pearl -o stratum+tcp://{host}:7048 -u {wallet}/{worker}',
     },
     "srb": {  # SRBMiner-MULTI (alternativa)
-        "urls": [
-            "https://github.com/kryptex-miners-org/kryptex-miners/releases/download/srbminer-3-8-4/SRBMiner-Multi-3-8-4-Linux.tar.gz",
-            "https://github.com/doktor83/SRBMiner-Multi/releases/download/3.8.4/SRBMiner-Multi-3-8-4-Linux.tar.gz",
-        ],
+        "repo": "doktor83/SRBMiner-Multi",
+        "asset": r"/SRBMiner-Multi-[0-9-]+-Linux\.tar\.gz$",
+        "urls": ["https://github.com/doktor83/SRBMiner-Multi/releases/download/3.8.6/SRBMiner-Multi-3-8-6-Linux.tar.gz"],
         "bin": "SRBMiner-MULTI",
         "cmd": '"$BIN" --disable-cpu --algorithm pearlhash --pool {host}:7048 --wallet {wallet}.{worker}',
     },
@@ -72,7 +77,10 @@ DEFAULT_CONFIG = {
     "stop_profit_per_hour": 0.0,   # destroi a maquina se o lucro cair abaixo disso
     "max_instances": 5,
     "max_spend_per_hour": 2.00,    # soma do aluguel de todas as maquinas do bot (US$/h)
-    "min_credit_usd": 3.0,         # nao aluga mais nada se o saldo na Vast ficar abaixo disso
+    "min_credit_usd": 0.10,        # abaixo disso nao aluga nada e fica esperando deposito
+    "stop_credit_usd": 0.10,       # destroi todas as maquinas do bot antes do saldo passar daqui
+    "min_runway_hours": 1.0,       # so aluga se o saldo pagar pelo menos 1 h da maquina nova
+    "use_latest_miner": True,      # baixa a versao mais nova do minerador (senao usa a fixa)
     "allow_on_demand": True,
     "allow_interruptible": True,
     "bid_markup": 0.05,            # lance = lance minimo x (1 + bid_markup)
@@ -83,7 +91,7 @@ DEFAULT_CONFIG = {
     "max_gpus_per_offer": 8,
     "exclude_countries": [],       # ex.: ["CN"] para evitar hosts na China
     "disk_gb": 10,
-    "image": "nvidia/cuda:12.4.1-runtime-ubuntu22.04",
+    "image": "nvidia/cuda:12.4.1-base-ubuntu22.04",  # imagem pequena: os mineradores ja trazem o CUDA
     "start_grace_min": 20,         # tempo para a maquina ligar antes de desistir
     "hashrate_check_min": 40,      # a partir daqui confere o hashrate real na Kryptex
     "min_hashrate_ratio": 0.5,     # destroi se o hashrate real for < 50% do esperado
@@ -329,10 +337,27 @@ def miner_for(gpu_name, cfg):
     return "krig" if gpu_name.upper().startswith(("RTX", "GTX", "TITAN")) else "peak"
 
 
-def onstart_script(miner, wallet, worker, host):
+def latest_lookup(miner, use_latest):
+    """Trecho de shell que poe em $LATEST o link da versao mais nova (GitHub releases/latest)."""
+    api = miner.get("latest_api") or (
+        f"https://api.github.com/repos/{miner['repo']}/releases/latest" if miner.get("repo") else "")
+    if not (use_latest and api and miner.get("asset")):
+        return 'LATEST=""'
+    return (
+        "LATEST=$(get " + shlex.quote(api) + " 2>/dev/null"
+        " | grep -o '\"browser_download_url\": *\"[^\"]*\"'"
+        " | sed 's/.*: *\"\\([^\"]*\\)\"$/\\1/'"
+        " | grep -E " + shlex.quote(miner["asset"]) + " | head -1)\n"
+        'if [ -n "$LATEST" ]; then echo "versao mais recente: $LATEST"; '
+        'else echo "nao consegui ver a versao mais recente, usando a fixa"; fi'
+    )
+
+
+def onstart_script(miner, wallet, worker, host, use_latest=True):
     cmd = miner["cmd"].format(host=host, wallet=shlex.quote(wallet), worker=shlex.quote(worker))
     urls = " ".join(shlex.quote(u) for u in miner["urls"])
     binname = shlex.quote(miner["bin"])
+    lookup = latest_lookup(miner, use_latest)
     return f"""cat > /root/pearl_mine.sh <<'PEARLEOF'
 #!/bin/bash
 echo "pearl-bot: iniciando $(date)"
@@ -340,14 +365,16 @@ if ! command -v curl >/dev/null 2>&1 && ! command -v wget >/dev/null 2>&1; then
   apt-get update -y >/dev/null 2>&1
   DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends curl ca-certificates >/dev/null 2>&1
 fi
+get() {{ if command -v curl >/dev/null 2>&1; then curl -fsSL --max-time 30 "$1"; else wget -q -T 30 -O- "$1"; fi; }}
+dl() {{ if command -v curl >/dev/null 2>&1; then curl -fsSL --retry 3 -o "$2" "$1"; else wget -q -O "$2" "$1"; fi; }}
 mkdir -p /opt/miner && cd /opt/miner
 BIN=$(find /opt/miner -type f -name {binname} 2>/dev/null | head -1)
 if [ -z "$BIN" ]; then
-  for u in {urls}; do
+  {lookup}
+  for u in $LATEST {urls}; do
     echo "baixando $u"
     rm -f m.tgz
-    if command -v curl >/dev/null 2>&1; then curl -fsSL --retry 3 -o m.tgz "$u"; else wget -q -O m.tgz "$u"; fi
-    tar xzf m.tgz && break
+    dl "$u" m.tgz && tar xf m.tgz && break
   done
   BIN=$(find /opt/miner -type f -name {binname} | head -1)
 fi
@@ -374,7 +401,7 @@ def rent(vast, ev, cfg, live):
     payload = {
         "client_id": "me", "image": cfg["image"], "env": {}, "price": ev["bid"],
         "disk": float(cfg["disk_gb"]), "label": LABEL_PREFIX + worker,
-        "onstart": onstart_script(miner, cfg["wallet"], worker, host),
+        "onstart": onstart_script(miner, cfg["wallet"], worker, host, cfg["use_latest_miner"]),
         "runtype": "ssh_proxy", "cancel_unavail": True,
     }
     tag = "INTERROMPIVEL" if ev["type"] == "bid" else "FIXO"
@@ -394,8 +421,30 @@ def rent(vast, ev, cfg, live):
 # ---------------------------------------------------------------- ciclo
 
 
+def is_bot(inst):
+    return str(inst.get("label") or "").startswith(LABEL_PREFIX)
+
+
 def bot_instances(vast):
-    return [i for i in vast.instances() if str(i.get("label") or "").startswith(LABEL_PREFIX)]
+    return [i for i in vast.instances() if is_bot(i)]
+
+
+def available_credit(user):
+    """Saldo que da para gastar: credito menos o que estiver devendo (balance negativo)."""
+    credit = float(user.get("credit") or 0)
+    balance = float(user.get("balance") or 0)
+    return credit + min(balance, 0.0)
+
+
+def destroy_all(vast, insts, live, why):
+    for i in insts:
+        log(f"  DESTRUIR #{i['id']} {i.get('num_gpus')}x {i.get('gpu_name')} -> {why}"
+            + ("" if live else " [simulacao]"))
+        if live:
+            try:
+                vast.destroy(i["id"])
+            except RuntimeError as e:
+                log(f"  falhou ao destruir #{i['id']}: {e}")
 
 
 def manage_instance(vast, inst, cfg, market, workers, state, live):
@@ -454,24 +503,34 @@ def cycle(cfg, live, state):
     log(f"PRL ${market['price']:.4f} | {market['prl_per_th_day']:.5f} PRL/TH/dia | "
         f"${market['usd_per_th_hour'] * 100:.4f}/h por 100 TH/s")
 
-    active, credit = [], None
+    # margem: o que as maquinas gastam ate o proximo ciclo (+3 min de folga)
+    margin_h = (float(cfg["loop_interval_min"]) + 3) / 60.0
+    stop_at = float(cfg["stop_credit_usd"])
+    active, credit, spend = [], None, 0.0
     if cfg["vast_api_key"]:
-        user = vast.user()
-        credit = float(user.get("credit", user.get("balance", 0)) or 0)
+        credit = available_credit(vast.user())
         workers = get_workers(cfg["wallet"])
-        for inst in bot_instances(vast):
+        everything = vast.instances()
+        others = [i for i in everything if not is_bot(i)]
+        for inst in [i for i in everything if is_bot(i)]:
             if manage_instance(vast, inst, cfg, market, workers, state, live):
                 active.append(inst)
         spend = sum(float(i.get("dph_total") or 0) for i in active)
-        runway = credit / spend if spend else float("inf")
+        runway = (credit - stop_at) / spend if spend else float("inf")
         log(f"saldo Vast ${credit:.2f} | {len(active)} maquinas | gasto ${spend:.3f}/h"
-            + (f" | saldo dura ~{runway:.1f} h" if spend else ""))
+            + (f" | trava de saldo em ~{max(runway, 0):.1f} h" if spend else ""))
+        if others:
+            log(f"aviso: {len(others)} maquina(s) na conta que nao sao do bot; o bot nao mexe nelas")
+        # trava de saldo: destroi tudo antes de o saldo passar de stop_credit_usd
+        if active and credit - spend * margin_h <= stop_at:
+            log(f"TRAVA DE SALDO: ${credit:.2f} e cai abaixo de ${stop_at:.2f} antes do proximo ciclo")
+            destroy_all(vast, active, live, "saldo no limite")
+            return
     else:
         log("sem VAST_API_KEY: so simulando escolhas (nao ve as maquinas alugadas)")
-        spend = 0.0
 
-    if credit is not None and credit < cfg["min_credit_usd"]:
-        log(f"saldo abaixo de ${cfg['min_credit_usd']:.2f}: nao aluga mais nada")
+    if credit is not None and credit < float(cfg["min_credit_usd"]):
+        log(f"saldo ${credit:.2f} abaixo de ${float(cfg['min_credit_usd']):.2f}: aguardando deposito")
         return
     free = int(cfg["max_instances"]) - len(active)
     if free <= 0:
@@ -485,8 +544,12 @@ def cycle(cfg, live, state):
             break
         if spend + ev["cost"] > cfg["max_spend_per_hour"]:
             continue
-        if credit is not None and credit < ev["cost"] * 2:
-            continue
+        if credit is not None:
+            need = stop_at + (spend + ev["cost"]) * (float(cfg["min_runway_hours"]) + margin_h)
+            if credit < need:
+                log(f"  saldo ${credit:.2f} nao cobre {ev['n']}x {ev['gpu']} por "
+                    f"{cfg['min_runway_hours']} h (precisa ${need:.2f}), pulando")
+                continue
         try:
             rent(vast, ev, cfg, live)
             free -= 1
@@ -536,7 +599,8 @@ def main():
         workers = get_workers(cfg["wallet"])
         insts = bot_instances(vast)
         user = vast.user()
-        print(f"saldo ${float(user.get('credit', 0) or 0):.2f} | PRL ${market['price']:.4f} | {len(insts)} maquinas")
+        print(f"saldo ${available_credit(user):.2f} (credito {user.get('credit')}, balance {user.get('balance')}) | "
+              f"PRL ${market['price']:.4f} | {len(insts)} maquinas do bot")
         for i in insts:
             w = str(i["label"])[len(LABEL_PREFIX):]
             th = workers.get(w)
